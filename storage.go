@@ -95,13 +95,11 @@ func (ks *Keystorage) HasService(servicename string) bool {
 }
 
 func (ks *Keystorage) Write(username, servicename, key string) error {
-	d := *(ks.Data)
-
-	if d == nil {
-		d = make(Data)
+	if (*ks.Data) == nil {
+		(*ks.Data) = make(Data)
 	}
-	if d[username] == nil {
-		d[username] = make(map[string]string)
+	if (*ks.Data)[username] == nil {
+		(*ks.Data)[username] = make(map[string]string)
 	}
 
 	(*ks.Data)[username][servicename] = key
