@@ -1,119 +1,96 @@
 package keystorage
 
 import (
-	"errors"
+	"encoding/json"
 	"io/ioutil"
-	"os"
 
-	"gopkg.in/yaml.v2"
-
-	"github.com/ungerik/go-dry"
+	"github.com/pkg/errors"
 )
 
-type Keystorage struct {
-	filepath string
-	Data     *Data
+type Storage interface {
+	UserKey(username string, servicename string) (string, error)
+	HasService(servicename string) bool
+	AuthService(service, user, token string) error
+	ServiceID(service, user string) (string, error)
 }
 
-var (
-	instance *Keystorage
-)
-
-type (
-	username    = string
-	servicename = string
-)
-
-type Data map[username]map[servicename]string
-
-func CreateStorage(path string) (*Keystorage, error) {
-	if instance != nil {
-		return instance, nil
-	}
-
-	if dry.FileExists(path) {
-		return nil, errors.New("file is exist")
-	}
-
-	_, err := os.Create(path)
-	if err != nil {
-		return nil, err
-	}
-
-	res := &Keystorage{
-		filepath: path,
-		Data:     new(Data),
-	}
-
-	return res, nil
+type PrimitiveStorage struct {
+	keys    map[string]string
+	service string
 }
 
-func OpenStorage(path string) (*Keystorage, error) {
-	if instance != nil {
-		return instance, nil
+func NewPrimitive(service string) *PrimitiveStorage {
+	return &PrimitiveStorage{
+		keys:    make(map[string]string),
+		service: service,
 	}
-
-	if !dry.FileExists(path) {
-		return CreateStorage(path)
-	}
-
-	b, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	d := new(Data)
-	err = yaml.Unmarshal(b, d)
-	if err != nil {
-		return nil, err
-	}
-
-	res := &Keystorage{
-		filepath: path,
-		Data:     d,
-	}
-
-	return res, nil
 }
 
-func (ks *Keystorage) UserKey(username, servicename string) (string, error) {
-	d := *ks.Data
-	if _, ok := d[username]; !ok {
-		return "", errors.New("username '" + username + "' not found")
+func OpenPrimitive(service, path string) (*PrimitiveStorage, error) {
+	file, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, errors.Wrap(err, "can't open storage")
 	}
 
-	key, ok := d[username][servicename]
-	if !ok {
-		return "", errors.New("username '" + username + "' not registred at '" + servicename + "' service")
+	var keys map[string]string
+	err = json.Unmarshal(file, &keys)
+	if err != nil {
+		return nil, errors.Wrap(err, "can't read json keys")
 	}
 
+	return &PrimitiveStorage{
+		keys:    keys,
+		service: service,
+	}, nil
+}
+
+func (p *PrimitiveStorage) Dump(path string) error {
+	data, err := json.Marshal(p.keys)
+	if err != nil {
+		return errors.Wrap(err, "can't encode json keys")
+	}
+
+	err = ioutil.WriteFile(path, data, 0660)
+	if err != nil {
+		return errors.Wrap(err, "can't write file with keys")
+	}
+	return nil
+}
+
+func (p *PrimitiveStorage) UserKey(username string, servicename string) (string, error) {
+	if servicename != p.service {
+		return "", errors.New("can't use not " + p.service + " service")
+	}
+	key, found := p.keys[username]
+	if !found {
+		return "", &ErrUserNotFound{User: username}
+	}
 	return key, nil
 }
 
-func (ks *Keystorage) HasService(servicename string) bool {
-	return true
+func (p *PrimitiveStorage) HasService(servicename string) bool {
+	return servicename == p.service
 }
 
-func (ks *Keystorage) Write(username, servicename, key string) error {
-	if (*ks.Data) == nil {
-		(*ks.Data) = make(Data)
-	}
-	if (*ks.Data)[username] == nil {
-		(*ks.Data)[username] = make(map[string]string)
+func (p *PrimitiveStorage) AuthService(service, user, token string) error {
+	if service != p.service {
+		return errors.New("can't use not " + p.service + " service")
 	}
 
-	(*ks.Data)[username][servicename] = key
-
-	return ks.Dump()
+	p.keys[user] = token
+	return nil
 }
 
-func (ks *Keystorage) Dump() error {
-	b, err := yaml.Marshal(ks.Data)
-	if err != nil {
-		return err
+// для удобства, если нужно добавить только 1-2 пользователя
+func (p *PrimitiveStorage) Set(user, key string) *PrimitiveStorage {
+	p.keys[user] = key
+	return p
+}
+
+func (p *PrimitiveStorage) ServiceID(service, user string) (string, error) {
+	if p.service != service {
+		return "", errors.New("can't use not " + p.service + " service")
 	}
 
-	fi, _ := os.Stat(ks.filepath)
-
-	return ioutil.WriteFile(ks.filepath, b, fi.Mode())
+	return user, nil
 }
